@@ -1,6 +1,7 @@
 import requests
 from urllib.parse import urlencode
 from pprint import pprint
+import time
 
 try:
     import simplejson as json   # try the faster simplejson on old versions
@@ -35,9 +36,13 @@ class ESClient:
     by using the send_request() method to directly do an HTTP request to the
     ElasticSearch API.
 
+    Modification by Data-Publica:
+      init contains two more parameters:
+        request_retry=2: number of http request retries if a network timeout appears
+        request_retry_wait=10: number of seconds to wait during retries
     """
 
-    def __init__(self, es_url='http://localhost:9200', request_timeout=10):
+    def __init__(self, es_url='http://localhost:9200', request_timeout=10, request_retry=2, request_retry_wait=5):
         self.es_url = es_url
         self.request_timeout = request_timeout
         self.bulk_data = ''
@@ -48,6 +53,9 @@ class ESClient:
         # For those that forget the http part, lets just add it
         if not self.es_url.startswith('http://'):
             self.es_url = "http://" + self.es_url
+        self.request_retry = request_retry
+        self.request_retry_wait = request_retry_wait
+
     #
     # Internal helper methods
     #
@@ -118,8 +126,18 @@ class ESClient:
         if not hasattr(requests, method.lower()):
             raise ESClientException("No such HTTP Method '%s'!" %
                                     method.upper())
-
-        self.last_response = requests.request(method.lower(), url, **kwargs)
+        tries = self.request_retry
+        while tries >= 0:
+          try:
+            self.last_response = requests.request(method.lower(), url, **kwargs)
+            return
+          except requests.exceptions.Timeout as e:
+            log.warning("Timeout during request from elasticsearch, %d retries left" % tries)
+            tries -= 1
+            if tries >= 0:
+              time.sleep(self.request_retry_wait)
+            else:
+              raise e
 
     def _search_operation(self, request_type, query_body=None,
                     operation_type="_search", query_string_args=None,
